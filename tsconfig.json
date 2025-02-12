@@ -1,0 +1,14 @@
+{
+    "compilerOptions": {
+      "target": "ES6",
+      "module": "CommonJS",
+      "strict": true,
+      "esModuleInterop": true,
+      "skipLibCheck": true,
+      "moduleResolution": "node", // Asegúrate de que esta opción esté presente
+      "outDir": "./dist",
+      "rootDir": "./lib"
+    },
+    "include": ["lib/**/*"],
+    "exclude": ["node_modules"]
+  }
