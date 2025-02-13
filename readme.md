@@ -50,7 +50,7 @@ npm install waitlist-mailer
 Make sure you have the necessary dependencies installed:
 
 ```bash
-npm install nodemailer joi
+npm -i
 ```
 
 ---
