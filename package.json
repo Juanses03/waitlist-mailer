@@ -1,0 +1,32 @@
+{
+  "name": "waitlist-mailer",
+  "version": "0.0.1",
+  "description": "A tool to manage waitlists and send confirmation emails.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "test": "jest",
+    "build": "tsup lib/index.ts --format esm,cjs --dts"
+  },
+  "keywords": [
+    "waitlist",
+    "mailer",
+    "nodemailer",
+    "typescript"
+  ],
+  "author": "JuansesDev",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/nodemailer": "^6.4.17",
+    "eslint": "^9.20.1",
+    "jest": "^29.7.0",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@types/joi": "^17.2.3",
+    "joi": "^17.13.3",
+    "nodemailer": "^6.10.0"
+  }
+}
