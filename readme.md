@@ -1,8 +1,6 @@
 # WaitlistMailer
 
-
-
-![GitHub](https://img.shields.io/badge/license-MIT-blue.svg) <img title="" src="file:///C:/Users/Juanse/Downloads/WaitlistMailer.webp" alt="Version" width="294" data-align="center">
+![GitHub](https://img.shields.io/badge/license-MIT-blue.svg) <img title="" src="WaitlistMailer.webp" alt="Version" width="294" data-align="center">
 
 The **WaitlistMailer** package is a tool designed to manage waitlists and send confirmation emails to registered users. It supports both local (`localStorage`) and database (`db`) storage and uses customizable HTML templates for confirmation emails.
 
