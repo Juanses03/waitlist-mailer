@@ -1,6 +1,12 @@
 # WaitlistMailer
 
-![GitHub](https://img.shields.io/badge/license-MIT-blue.svg) <img title="" src="WaitlistMailer.webp" alt="Version" width="294" data-align="center">
+[---->npm project link<<----](https://www.npmjs.com/package/waitlist-mailer)
+
+![GitHub](https://img.shields.io/badge/license-MIT-blue.svg) 
+
+npm project link
+
+<img title="" src="WaitlistMailer.webp" alt="Version" width="294" data-align="center">
 
 The **WaitlistMailer** package is a tool designed to manage waitlists and send confirmation emails to registered users. It supports both local (`localStorage`) and database (`db`) storage and uses customizable HTML templates for confirmation emails.
 
@@ -25,7 +31,7 @@ The **WaitlistMailer** package is a tool designed to manage waitlists and send c
 
 ## Project Description
 
-**WaitlistMailer** is a TypeScript class that allows you to manage a waitlist and send confirmation emails using **Nodemailer** [[1]]. The package is designed to be flexible and easy to integrate into modern web projects. It includes robust email validation using **Joi** [[2]], support for dynamic HTML templates, and options for both local and database storage.
+**WaitlistMailer** is a TypeScript class that allows you to manage a waitlist and send confirmation emails using **Nodemailer**. The package is designed to be flexible and easy to integrate into modern web projects. It includes robust email validation using **Joi**, support for dynamic HTML templates, and options for both local and database storage.
 
 ---
 
@@ -50,7 +56,7 @@ npm install waitlist-mailer
 Make sure you have the necessary dependencies installed:
 
 ```bash
-npm -i
+npm install
 ```
 
 ---
