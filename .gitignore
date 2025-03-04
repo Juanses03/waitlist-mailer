@@ -1,21 +1,36 @@
 # Dependencies
-node_modules/
+/node_modules
 
 # Compiled files
-dist/
+/dist
 
 # Local package files
 *.tgz
 
-# Logs and debugging files
-npm-debug.log
-yarn-debug.log
-yarn-error.log
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Operating system files
+# OS files
 .DS_Store
 Thumbs.db
 
-# IDE and editor-specific files
-.vscode/
-.idea/
+# IDE files
+/.vscode/*
+!.vscode/settings.json  # Incluir solo la configuración compartible
+!.vscode/tasks.json
+!.vscode/launch.json
+/.idea
+
+# Environment files (NO COMMITEAR ESTOS ARCHIVOS)
+.env
+.env.local
+.env.*
+
+# Test artifacts (Jest)
+/coverage
+
+# Build caches
+*.tsbuildinfo

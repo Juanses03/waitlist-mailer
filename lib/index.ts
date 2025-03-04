@@ -1,7 +1,9 @@
-import nodemailer from 'nodemailer';
+import nodemailer, { Transporter, SendMailOptions } from 'nodemailer';
 import { readFile } from 'fs/promises';
 import Joi from 'joi';
 import { EventEmitter } from 'events';
+import mongoose, { Schema, Model, Document } from 'mongoose';
+import { Sequelize, DataTypes, Model as SequelizeModel, Optional, Op } from 'sequelize';
 
 interface MailConfig {
   host: string;
@@ -12,235 +14,406 @@ interface MailConfig {
 
 interface WaitlistMailerOptions {
   companyName?: string;
+  mongoUri?: string;
+  sqlConfig?: {
+    dialect: 'postgres' | 'mysql';
+    host: string;
+    port: number;
+    username: string;
+    password: string;
+    database: string;
+  };
 }
 
 /**
+ * Interface for Sequelize Waitlist model
+ */
+interface WaitlistAttributes {
+  email: string;
+  createdAt?: Date;
+}
+
+interface WaitlistCreationAttributes extends Optional<WaitlistAttributes, 'email' | 'createdAt'> {}
+
+class WaitlistSequelize extends SequelizeModel<WaitlistAttributes, WaitlistCreationAttributes> implements WaitlistAttributes {
+  declare email: string;
+  declare createdAt: Date;
+}
+
+const WaitlistSchema = new Schema<Document & WaitlistAttributes>({
+  email: { type: String, required: true, unique: true, index: true },
+  createdAt: { type: Date, default: Date.now },
+});
+
+WaitlistSchema.index({ email: 1 }, { unique: true });
+
+const WaitlistModel: Model<Document & WaitlistAttributes> = mongoose.model<Document & WaitlistAttributes>('Waitlist', WaitlistSchema);
+
+/**
  * Class to manage the waitlist and send confirmation emails.
- * Supports both local and database storage, and extends EventEmitter
- * to allow event subscriptions for various actions.
+ * This is a reusable NPM package that supports local, MongoDB, and SQL storage.
+ * Extends EventEmitter for event-driven functionality.
  */
 class WaitlistMailer extends EventEmitter {
-  private storage: 'local' | 'db';
+  private storage: 'local' | 'db' | 'sql';
   private waitlist: Set<string>;
-  private transporter: nodemailer.Transporter;
+  private transporter: Transporter;
   private companyName: string;
+  private mongoUri?: string;
+  private sqlConnection?: Sequelize;
+  private initialized: boolean = false;
 
-  /**
-   * Initializes the WaitlistMailer instance.
-   * @param storage - Storage type ('local' or 'db').
-   * @param mailConfig - SMTP transporter configuration.
-   * @param options - Optional settings (e.g., company name).
-   */
-  constructor(
-    storage: 'local' | 'db' = 'local',
-    mailConfig: MailConfig,
-    options?: WaitlistMailerOptions
-  ) {
+  constructor(storage: 'local' | 'db' | 'sql' = 'local', mailConfig: MailConfig, options?: WaitlistMailerOptions) {
     super();
     this.storage = storage;
     this.waitlist = new Set();
-    this.companyName = options?.companyName || "Your Company Name";
+    this.companyName = options?.companyName || 'Your Company Name';
+    this.mongoUri = options?.mongoUri;
+    this.sqlConnection = options?.sqlConfig ? new Sequelize({
+      dialect: options.sqlConfig.dialect,
+      host: options.sqlConfig.host,
+      port: options.sqlConfig.port,
+      username: options.sqlConfig.username,
+      password: options.sqlConfig.password,
+      database: options.sqlConfig.database,
+      logging: false // Disable logging for tests
+    }) : undefined;
 
-    // Initialize Nodemailer transporter with provided mail configuration
+    // Initialize Nodemailer transporter
     this.transporter = nodemailer.createTransport({
       host: mailConfig.host,
       port: mailConfig.port,
-      secure: mailConfig.port === 465, // true for port 465 (SSL)
+      secure: mailConfig.port === 465,
       auth: {
         user: mailConfig.user,
         pass: mailConfig.pass,
       },
     });
+
+    // Verify transporter configuration
+    this.transporter.verify((error) => {
+      if (error) {
+        console.error('Transporter configuration error:', error);
+        this.emit('onTransporterError', error);
+      } else {
+        console.log('Transporter is ready');
+        this.emit('onTransporterReady');
+      }
+    });
+
+    // Connect to MongoDB or SQL if selected
+    if (this.storage === 'db' && this.mongoUri) {
+      mongoose.connect(this.mongoUri).then(() => {
+        console.log('Connected to MongoDB');
+        this.emit('onDbConnected');
+        return this.loadWaitlistFromDb();
+      }).then(() => {
+        this.initialized = true;
+        this.emit('onInitialized');
+      }).catch(err => {
+        console.error('MongoDB connection error:', err);
+        this.emit('onDbError', err);
+      });
+    } else if (this.storage === 'sql' && this.sqlConnection) {
+      WaitlistSequelize.init({
+        email: {
+          type: DataTypes.STRING,
+          allowNull: false,
+          unique: true,
+        },
+        createdAt: {
+          type: DataTypes.DATE,
+          defaultValue: DataTypes.NOW,
+        },
+      }, {
+        sequelize: this.sqlConnection,
+        modelName: 'Waitlist',
+        indexes: [{ unique: true, fields: ['email'] }, { fields: ['createdAt'] }],
+      });
+
+      this.sqlConnection.authenticate().then(() => {
+        console.log('Connected to SQL database');
+        this.emit('onSqlConnected');
+        return WaitlistSequelize.sync();
+      }).then(() => {
+        return this.loadWaitlistFromSql();
+      }).then(() => {
+        this.initialized = true;
+        this.emit('onInitialized');
+      }).catch(err => {
+        console.error('SQL connection error:', err);
+        this.emit('onSqlError', err);
+      });
+    } else {
+      // For local storage, mark as initialized immediately
+      this.initialized = true;
+      setTimeout(() => this.emit('onInitialized'), 0);
+    }
   }
 
-  /**
-   * Validates the format of an email address using Joi.
-   * @param email - Email address to validate.
-   * @returns True if the email is valid, false otherwise.
-   */
-  private isValidEmail(email: string): boolean {
-    const schema = Joi.string().email({ tlds: { allow: false } });
+  // Private method to validate email format
+  private validateEmailFormat(email: string): { isValid: boolean; message?: string } {
+    const schema = Joi.string().email({ tlds: { allow: false } }).required();
     const { error } = schema.validate(email);
     if (error) {
-      console.error(`Validation error for email ${email}:`, error.message);
-      return false;
+      return { isValid: false, message: error.message };
     }
-    return true;
+    return { isValid: true };
   }
 
-  /**
-   * Checks if an email is already registered in the waitlist.
-   * @param email - Email address to check.
-   * @returns True if the email is registered, false otherwise.
-   */
-  private isEmailRegistered(email: string): boolean {
+  // Private method to check if email already exists
+  private emailExists(email: string): boolean {
     return this.waitlist.has(email);
   }
 
-  /**
-   * Adds an email address to the waitlist if it is valid and unique.
-   * @param email - Email address to add.
-   * @returns True if the email was added successfully, false otherwise.
-   */
+  // Centralized error handling
+  private handleError(email: string, action: string, error: unknown): void {
+    console.error(`${action} failed for ${email}:`, error);
+    this.emit('onError', { email, action, error });
+  }
+
+  // Load waitlist from MongoDB
+  private async loadWaitlistFromDb(): Promise<void> {
+    try {
+      const waitlistDocs = await WaitlistModel.find();
+      waitlistDocs.forEach(doc => this.waitlist.add(doc.email));
+      console.log('Waitlist loaded from MongoDB:', Array.from(this.waitlist));
+      return Promise.resolve();
+    } catch (error) {
+      this.handleError('waitlist', 'loadWaitlistFromDb', error);
+      return Promise.reject(error);
+    }
+  }
+
+  // Load waitlist from SQL
+  private async loadWaitlistFromSql(): Promise<void> {
+    if (!this.sqlConnection) return Promise.resolve();
+    try {
+      const waitlistDocs = await WaitlistSequelize.findAll({ attributes: ['email'] });
+      waitlistDocs.forEach(doc => this.waitlist.add(doc.email));
+      console.log('Waitlist loaded from SQL:', Array.from(this.waitlist));
+      return Promise.resolve();
+    } catch (error) {
+      this.handleError('waitlist', 'loadWaitlistFromSql', error);
+      return Promise.reject(error);
+    }
+  }
+
+  // Check if the system is initialized
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
+  // Wait for initialization to complete
+  async waitForInitialization(): Promise<void> {
+    if (this.initialized) return Promise.resolve();
+
+    return new Promise<void>((resolve) => {
+      this.once('onInitialized', () => resolve());
+    });
+  }
+
+  // Advanced query: Find emails by pattern
+  async findEmailsByPattern(pattern: string): Promise<string[]> {
+    try {
+      let results: string[] = [];
+      if (this.storage === 'local') {
+        // For local storage, filter in-memory
+        results = Array.from(this.waitlist).filter(email =>
+          email.toLowerCase().includes(pattern.toLowerCase())
+        );
+      } else if (this.storage === 'db' && this.mongoUri) {
+        const regex = new RegExp(pattern, 'i');
+        const docs = await WaitlistModel.find({ email: { $regex: regex } });
+        results = docs.map(doc => doc.email);
+      } else if (this.storage === 'sql' && this.sqlConnection) {
+        const docs = await WaitlistSequelize.findAll({
+          where: { email: { [Op.like]: `%${pattern}%` } },
+        });
+        results = docs.map(doc => doc.email);
+      }
+      console.log(`Found emails matching "${pattern}":`, results);
+      return results;
+    } catch (error) {
+      this.handleError('waitlist', 'findEmailsByPattern', error);
+      return [];
+    }
+  }
+
+  // Advanced query: Count emails by date range
+  async countWaitlistByDate(startDate?: Date, endDate?: Date): Promise<number> {
+    try {
+      let count = 0;
+
+      if (this.storage === 'local') {
+        // For local storage, we don't track creation dates so return total count
+        count = this.waitlist.size;
+      } else if (this.storage === 'db' && this.mongoUri) {
+        const query: any = {};
+        if (startDate || endDate) {
+          query.createdAt = {};
+          if (startDate) query.createdAt.$gte = startDate;
+          if (endDate) query.createdAt.$lte = endDate;
+        }
+        count = await WaitlistModel.countDocuments(query);
+      } else if (this.storage === 'sql' && this.sqlConnection) {
+        const where: any = {};
+        if (startDate && endDate) {
+          where.createdAt = { [Op.between]: [startDate, endDate] };
+        } else {
+          if (startDate) where.createdAt = { ...where.createdAt, [Op.gte]: startDate };
+          if (endDate) where.createdAt = { ...where.createdAt, [Op.lte]: endDate };
+        }
+        count = await WaitlistSequelize.count({ where });
+      }
+
+      console.log(`Emails count between ${startDate} and ${endDate}:`, count);
+      return count;
+    } catch (error) {
+      this.handleError('waitlist', 'countWaitlistByDate', error);
+      return 0;
+    }
+  }
+
   addEmail(email: string): boolean {
-    if (!this.isValidEmail(email)) {
-      console.error(`Invalid email format: ${email}`);
+    // First validate the email format
+    const formatCheck = this.validateEmailFormat(email);
+    if (!formatCheck.isValid) {
+      console.error(`Validation error: ${formatCheck.message || 'Invalid email format'}`);
+      this.emit('onValidationError', { email, error: formatCheck.message });
       return false;
     }
 
-    if (this.isEmailRegistered(email)) {
+    // Then check if it already exists
+    if (this.emailExists(email)) {
       console.error(`Email already registered: ${email}`);
+      this.emit('onDuplicateEmail', email);
       return false;
     }
 
+    // Add to waitlist
     this.waitlist.add(email);
     console.log(`Email added: ${email}`);
-    this.emit('emailAdded', email);
+    this.emit('onEmailAdded', email);
+
+    const createdAt = new Date();
+
+    // Persist to storage
+    if (this.storage === 'db' && this.mongoUri) {
+      WaitlistModel.create({ email, createdAt }).catch(err => this.handleError(email, 'addEmailDb', err));
+    } else if (this.storage === 'sql' && this.sqlConnection) {
+      WaitlistSequelize.create({ email, createdAt }).catch(err => this.handleError(email, 'addEmailSql', err));
+    }
+
     return true;
   }
 
-  /**
-   * Removes an email address from the waitlist.
-   * @param email - Email address to remove.
-   * @returns True if the email was removed successfully, false otherwise.
-   */
   removeEmail(email: string): boolean {
-    if (!this.isEmailRegistered(email)) {
+    if (!this.waitlist.has(email)) {
       console.error(`Email not registered: ${email}`);
       return false;
     }
+
     this.waitlist.delete(email);
     console.log(`Email removed: ${email}`);
-    this.emit('emailRemoved', email);
+    this.emit('onEmailRemoved', email);
+
+    if (this.storage === 'db' && this.mongoUri) {
+      WaitlistModel.deleteOne({ email }).catch(err => this.handleError(email, 'removeEmailDb', err));
+    } else if (this.storage === 'sql' && this.sqlConnection) {
+      WaitlistSequelize.destroy({ where: { email } }).catch(err => this.handleError(email, 'removeEmailSql', err));
+    }
+
     return true;
   }
 
-  /**
-   * Retrieves the list of email addresses in the waitlist.
-   * @returns An array of email addresses.
-   */
   getWaitlist(): string[] {
     return Array.from(this.waitlist);
   }
 
-  /**
-   * Clears the waitlist.
-   */
   clearWaitlist(): void {
     this.waitlist.clear();
     console.log('Waitlist cleared');
-    this.emit('waitlistCleared');
+    this.emit('onWaitlistCleared');
+
+    if (this.storage === 'db' && this.mongoUri) {
+      WaitlistModel.deleteMany({}).catch(err => this.handleError('waitlist', 'clearWaitlistDb', err));
+    } else if (this.storage === 'sql' && this.sqlConnection) {
+      WaitlistSequelize.destroy({ where: {} }).catch(err => this.handleError('waitlist', 'clearWaitlistSql', err));
+    }
   }
 
-  /**
-   * Sends an email using Nodemailer.
-   * @param email - Recipient email address.
-   * @param subject - Email subject.
-   * @param htmlContent - Email HTML content.
-   * @returns True if the email was sent successfully, false otherwise.
-   */
   private async sendMail(email: string, subject: string, htmlContent: string): Promise<boolean> {
-    const mailOptions: nodemailer.SendMailOptions = {
+    if (!this.transporter || !(this.transporter.options as any).auth?.user) {
+      this.handleError(email, 'sendMail', 'Transporter not configured');
+      return false;
+    }
+
+    const mailOptions: SendMailOptions = {
       from: `"${this.companyName}" <${(this.transporter.options as any).auth?.user}>`,
       to: email,
       subject,
       html: htmlContent,
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8'
-      }
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
     };
 
     try {
       const info = await this.transporter.sendMail(mailOptions);
       console.log(`Confirmation email sent to: ${email}`);
       console.log('Message ID:', info.messageId);
-      this.emit('emailSent', email, info);
+      this.emit('onEmailSent', email, info);
       return true;
-    } catch (error: any) {
-      console.error(`Error sending email to ${email}:`, error);
-      this.emit('emailSendError', email, error);
+    } catch (error) {
+      this.handleError(email, 'sendMail', error);
       return false;
     }
   }
 
-  /**
-   * Sends a confirmation email using template functions.
-   * @param email - Recipient email address.
-   * @param subjectTemplate - Function that generates the email subject.
-   * @param bodyTemplate - Function that generates the email body (HTML).
-   * @returns True if the email was sent successfully, false otherwise.
-   */
   async sendConfirmation(
     email: string,
     subjectTemplate: (email: string) => string,
     bodyTemplate: (email: string) => string
   ): Promise<boolean> {
-    if (!this.isEmailRegistered(email)) {
-      console.error(`Email not found in waitlist: ${email}`);
+    // Check if email is in waitlist
+    if (!this.waitlist.has(email)) {
+      console.error(`Confirmation error for ${email}: Email not in waitlist`);
       return false;
     }
 
     const subject = subjectTemplate(email);
-    let htmlContent = bodyTemplate(email);
-    // Replace placeholder [Company Name] with the actual company name
-    htmlContent = htmlContent.replace(/\[Company Name\]/g, this.companyName);
+    let htmlContent = bodyTemplate(email).replace(/\[Company Name\]/g, this.companyName);
     return await this.sendMail(email, subject, htmlContent);
   }
 
-  /**
-   * Sends a confirmation email using an HTML template file.
-   * Supports dynamic replacements for placeholders in the template.
-   * @param email - Recipient email address.
-   * @param subjectTemplate - Function that generates the email subject.
-   * @param templateFilePath - Path to the HTML template file.
-   * @param replacements - Key-value pairs for replacing placeholders in the template.
-   * @returns True if the email was sent successfully, false otherwise.
-   */
   async sendConfirmationFromFile(
     email: string,
     subjectTemplate: (email: string) => string,
     templateFilePath: string,
     replacements: Record<string, string> = {}
   ): Promise<boolean> {
-    if (!this.isEmailRegistered(email)) {
-      console.error(`Email not found in waitlist: ${email}`);
+    // Check if email is in waitlist
+    if (!this.waitlist.has(email)) {
+      console.error(`File confirmation error for ${email}: Email not in waitlist`);
       return false;
     }
 
     let htmlContent: string;
     try {
       htmlContent = await readFile(templateFilePath, 'utf8');
-    } catch (fileError) {
-      console.error(`Template file not found at ${templateFilePath}:`, fileError);
+      const templateVariables = { email, companyName: this.companyName, ...replacements };
+      for (const [key, value] of Object.entries(templateVariables)) {
+        const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
+        htmlContent = htmlContent.replace(regex, value);
+      }
+    } catch (error) {
+      this.handleError(email, 'sendConfirmationFromFile', error);
       return false;
-    }
-
-    // Default variables for the template
-    const templateVariables = {
-      email,
-      companyName: this.companyName,
-      ...replacements
-    };
-
-    // Replace placeholders in the template
-    for (const [key, value] of Object.entries(templateVariables)) {
-      const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'g');
-      htmlContent = htmlContent.replace(regex, value);
     }
 
     const subject = subjectTemplate(email);
     return await this.sendMail(email, subject, htmlContent);
   }
 
-  /**
-   * Sends a confirmation email using template functions with a retry mechanism.
-   * @param email - Recipient email address.
-   * @param subjectTemplate - Function that generates the email subject.
-   * @param bodyTemplate - Function that generates the email body (HTML).
-   * @param retries - Number of retry attempts (default 3).
-   * @param delayMs - Delay between retries in milliseconds (default 1000).
-   * @returns True if the email was sent successfully, false otherwise.
-   */
   async sendConfirmationWithRetry(
     email: string,
     subjectTemplate: (email: string) => string,
@@ -250,32 +423,93 @@ class WaitlistMailer extends EventEmitter {
   ): Promise<boolean> {
     for (let attempt = 0; attempt <= retries; attempt++) {
       const result = await this.sendConfirmation(email, subjectTemplate, bodyTemplate);
-      if (result) {
-        return true;
-      }
-      this.emit('emailSendRetry', email, attempt + 1);
-      if (attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
+      if (result) return true;
+      this.emit('onEmailRetry', email, attempt + 1);
+      if (attempt < retries) await new Promise(resolve => setTimeout(resolve, delayMs));
     }
     return false;
   }
 
   /**
-   * Saves the waitlist to the specified storage (local or database).
+   * Sends bulk confirmation emails to all waitlist members.
+   * @param subjectTemplate - Function to generate the email subject.
+   * @param bodyTemplate - Function to generate the email body.
+   * @param retries - Number of retry attempts per email (default 3).
+   * @param delayMs - Delay between retries in milliseconds (default 1000).
+   * @returns Number of successfully sent emails.
    */
-  saveWaitlist(): void {
+  async sendBulkConfirmation(
+    subjectTemplate: (email: string) => string,
+    bodyTemplate: (email: string) => string,
+    retries: number = 3,
+    delayMs: number = 1000
+  ): Promise<number> {
+    const emails = this.getWaitlist();
+    let successCount = 0;
+
+    for (const email of emails) {
+      const result = await this.sendConfirmationWithRetry(email, subjectTemplate, bodyTemplate, retries, delayMs);
+      if (result) successCount++;
+    }
+
+    console.log(`Bulk confirmation sent to ${successCount} out of ${emails.length} emails`);
+    this.emit('onBulkConfirmationComplete', { successCount, total: emails.length });
+    return successCount;
+  }
+
+  async saveWaitlist(): Promise<boolean> {
     try {
+      const waitlistArray = Array.from(this.waitlist);
       if (this.storage === 'local') {
-        console.log('Waitlist saved locally:', Array.from(this.waitlist));
-      } else if (this.storage === 'db') {
-        // Implement database save logic here
-        console.log('Waitlist saved to database:', Array.from(this.waitlist));
+        console.log('Waitlist saved locally:', waitlistArray);
+        return true;
+      } else if (this.storage === 'db' && this.mongoUri) {
+        await WaitlistModel.deleteMany({});
+        if (waitlistArray.length > 0) {
+          await WaitlistModel.insertMany(waitlistArray.map(email => ({ email })));
+        }
+        console.log('Waitlist saved to MongoDB:', waitlistArray);
+        this.emit('onWaitlistSaved', waitlistArray);
+        return true;
+      } else if (this.storage === 'sql' && this.sqlConnection) {
+        await this.sqlConnection.transaction(async (t) => {
+          await WaitlistSequelize.destroy({ where: {}, transaction: t });
+          if (waitlistArray.length > 0) {
+            await WaitlistSequelize.bulkCreate(waitlistArray.map(email => ({ email })), { transaction: t });
+          }
+          console.log('Waitlist saved to SQL:', waitlistArray);
+          this.emit('onWaitlistSaved', waitlistArray);
+        });
+        return true;
       }
-      this.emit('waitlistSaved', Array.from(this.waitlist));
+      return false;
     } catch (error) {
-      console.error('Error saving waitlist:', error);
-      this.emit('waitlistSaveError', error);
+      this.handleError('waitlist', 'saveWaitlist', error);
+      return false;
+    }
+  }
+
+  // Clean up resources when done
+  async close(): Promise<void> {
+    try {
+      if (this.storage === 'db' && mongoose.connection.readyState !== 0) {
+        await mongoose.disconnect();
+        console.log('MongoDB connection closed');
+      }
+
+      if (this.storage === 'sql' && this.sqlConnection) {
+        await this.sqlConnection.close();
+        console.log('SQL connection closed');
+      }
+
+      // Close nodemailer connection if possible
+      if (this.transporter && typeof this.transporter.close === 'function') {
+        this.transporter.close();
+      }
+
+      console.log('WaitlistMailer resources cleaned up');
+    } catch (error) {
+      console.error('Error closing connections:', error);
     }
   }
 }
