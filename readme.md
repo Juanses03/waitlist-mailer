@@ -2,15 +2,23 @@
 
 [![npm project link](https://img.shields.io/badge/npm-waitlist--mailer-red.svg)](https://www.npmjs.com/package/waitlist-mailer)  
 [![GitHub](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)  
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://www.npmjs.com/package/waitlist-mailer)  
+[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](https://www.npmjs.com/package/waitlist-mailer)  
 [![Nodejs](https://img.shields.io/badge/node.js-%3E%3D14-blue.svg)](https://nodejs.org)  
 [![MongoDB](https://img.shields.io/badge/MongoDB-supported-green.svg)](https://www.mongodb.com)  
-[![PostgreSQL/MySQL](https://img.shields.io/badge/PostgreSQL%2FMySQL-supported-green.svg)](https://www.postgresql.org)  
+[![PostgreSQL/MySQL/SQLite](https://img.shields.io/badge/PostgreSQL%2FMySQL%2FSQLite-supported-green.svg)](https://www.postgresql.org)  
 [![Downloads](https://img.shields.io/npm/dt/waitlist-mailer.svg)](https://www.npmjs.com/package/waitlist-mailer)  
 
-**WaitlistMailer** is a TypeScript-based NPM package for managing waitlists and sending confirmation emails. It supports **local**, **MongoDB**, and **SQL (PostgreSQL/MySQL)** storage, with **customizable HTML templates**, an **event-driven architecture**, and advanced features like **bulk sending**, **automatic retries**, **Joi validation**, and **query capabilities**.
+**WaitlistMailer** is a TypeScript-based NPM package for managing waitlists and sending confirmation emails. It supports **local**, **MongoDB**, and **SQL (PostgreSQL/MySQL/SQLite)** storage, with **customizable HTML templates**, an **event-driven architecture**, and advanced features like **bulk sending**, **automatic retries**, **validator.js validation**, and **query capabilities**.
 
-The **1.0.0 version** introduces **bulk email sending**, **indexed database storage**, and **advanced queries**.
+---
+
+## What's New in Version 1.1.0
+
+- **Improved Error Handling**: Detailed event emissions for better debugging and error tracking.  
+- **Support for Multiple SMTP Providers**: Now works with any SMTP provider, not just Gmail.  
+- **Handlebars Integration**: Dynamic and reusable email templates using Handlebars.  
+- **Comprehensive Test Suite**: Full test coverage for all core functionalities.  
+- **Persistent Storage**: Data remains in the database unless explicitly cleared.  
 
 ---
 
@@ -43,24 +51,19 @@ The **1.0.0 version** introduces **bulk email sending**, **indexed database stor
 
 **WaitlistMailer** simplifies waitlist management in **Node.js** with robust email validation, flexible storage options, and efficient email delivery via **Nodemailer**. It's designed for scalability and ease of use, supporting both in-memory and persistent storage with MongoDB or SQL databases.
 
-**Version 1.0.0** adds:
-- **Bulk email sending** for efficient mass communication  
-- **Indexed MongoDB and SQL storage** for optimized performance  
-- **Advanced queries** for searching and aggregating waitlist data  
-
 ---
 
 ## Key Features
 
-- **Email Validation**: Strict validation using Joi  
-- **Storage Options**: Local (in-memory), MongoDB (`Waitlist` collection), or SQL (`waitlist` table)  
-- **Dynamic Templates**: HTML emails with inline or file-based templates  
-- **Nodemailer Integration**: Reliable SMTP delivery  
-- **Event-Driven**: Emits events like `onEmailSent`, `onBulkConfirmationComplete`  
-- **Retries**: Automatic retry for failed email sends  
-- **Bulk Sending**: Mass emailing with retry support (v1.0.0)  
-- **Database Indexing**: Indexed `email` and `createdAt` fields (v1.0.0)  
-- **Advanced Queries**: Pattern-based search and date range counting (v1.0.0)  
+- **Email Validation**: Strict validation using `validator.js`.  
+- **Storage Options**: Local (in-memory), MongoDB (`Waitlist` collection), or SQL (`waitlist` table: PostgreSQL/MySQL/SQLite).  
+- **Dynamic Templates**: HTML emails with Handlebars for inline or file-based templates.  
+- **Nodemailer Integration**: Reliable SMTP delivery with support for multiple providers.  
+- **Event-Driven**: Emits events like `onEmailSent`, `onBulkConfirmationComplete`, and `onWaitlistSaved`.  
+- **Retries**: Automatic retry for failed email sends.  
+- **Bulk Sending**: Mass emailing with retry support.  
+- **Database Indexing**: Indexed `email` and `createdAt` fields for optimized queries.  
+- **Advanced Queries**: Pattern-based search and date range counting.  
 
 > ⚠️ **Note**: Requires Node.js >= 14. Install via `npm install waitlist-mailer`.
 
@@ -69,22 +72,22 @@ The **1.0.0 version** introduces **bulk email sending**, **indexed database stor
 ## Installation
 
 ```bash
-npm install waitlist-mailer@1.0.0 nodemailer joi events mongoose sequelize pg mysql2
+npm install waitlist-mailer@1.1.0 nodemailer validator events mongoose sequelize pg mysql2 sqlite3 handlebars
 ```
 
 ### Dependencies
-- **nodemailer**: Email sending  
-- **joi**: Email validation  
-- **mongoose**: MongoDB support (optional)  
-- **sequelize, pg, mysql2**: SQL support (optional)
+- **validator**: Email validation.  
+- **mongoose**: MongoDB support (optional).  
+- **sequelize, pg, mysql2, sqlite3**: SQL support (optional).  
+- **handlebars**: Dynamic template rendering.  
 
 ### Environment Variables
-Create a `.env.local` file:
+Create `.env.local`:
 
 ```ini
-SMTP_HOST=smtp.gmail.com
+SMTP_HOST=smtp.example.com
 SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
+SMTP_USER=your-email@example.com
 SMTP_PASS=your-app-password
 MONGO_URI=mongodb://localhost:27017/waitlistdb
 SQL_DIALECT=mysql
@@ -100,10 +103,8 @@ SQL_DATABASE=waitlistdb
 ## Usage
 
 ### Initial Setup
-Initialize with storage type (local, db, or sql) and configuration:
-
 ```typescript
-import WaitlistMailer from 'waitlist-mailer';
+import WaitlistMailer, { StorageType } from 'waitlist-mailer';
 
 const mailConfig = {
   host: process.env.SMTP_HOST!,
@@ -112,8 +113,8 @@ const mailConfig = {
   pass: process.env.SMTP_PASS!,
 };
 
-// SQL Example
-const mailer = new WaitlistMailer('sql', mailConfig, {
+// SQL Example (MySQL)
+const mailer = new WaitlistMailer(StorageType.Sql, mailConfig, {
   companyName: 'My Company',
   sqlConfig: {
     dialect: 'mysql',
@@ -125,58 +126,36 @@ const mailer = new WaitlistMailer('sql', mailConfig, {
   },
 });
 
-// MongoDB Example
-// const mailer = new WaitlistMailer('db', mailConfig, { mongoUri: process.env.MONGO_URI! });
-
-// Local Example
-// const mailer = new WaitlistMailer('local', mailConfig);
-
-await mailer.waitForInitialization(); // Wait for DB connection if applicable
+await mailer.waitForInitialization();
 ```
 
 ### Adding Emails to the Waitlist
-
 ```typescript
-const success = mailer.addEmail('user@example.com');
+const success = await mailer.addEmail('user@example.com');
 console.log(success ? 'Email added' : 'Failed (invalid or duplicate)');
 ```
 
 ### Removing Emails
-
 ```typescript
-const removed = mailer.removeEmail('user@example.com');
+const removed = await mailer.removeEmail('user@example.com');
 console.log(removed ? 'Email removed' : 'Email not found');
 ```
 
 ### Viewing the Waitlist
-
 ```typescript
 const emails = mailer.getWaitlist();
 console.log('Current waitlist:', emails);
 ```
 
 ### Clearing the Waitlist
-
 ```typescript
-mailer.clearWaitlist();
+await mailer.clearWaitlist();
 console.log('Waitlist cleared');
 ```
 
 ### Sending Confirmation Emails
-
-#### Using Template Functions
-
-```typescript
-const subjectTemplate = (email: string) => `Welcome, ${email}!`;
-const bodyTemplate = (email: string) => `<h1>Hello ${email}</h1><p>Welcome to [Company Name]!</p>`;
-
-const sent = await mailer.sendConfirmation('user@example.com', subjectTemplate, bodyTemplate);
-console.log(sent ? 'Email sent' : 'Failed to send');
-```
-
-#### Using HTML Files
-Create `templates/confirmation.html`:
-
+#### Using Handlebars Templates
+Create `templates/confirmation.hbs`:
 ```html
 <h1>Welcome, {{email}}!</h1>
 <p>Thanks for joining {{companyName}}. {{customMessage}}</p>
@@ -186,27 +165,13 @@ Create `templates/confirmation.html`:
 const sent = await mailer.sendConfirmationFromFile(
   'user@example.com',
   (email) => `Welcome, ${email}!`,
-  './templates/confirmation.html',
-  { customMessage: 'We're excited to have you!' }
+  './templates/confirmation.hbs',
+  { customMessage: 'We\'re excited to have you!' }
 );
 console.log(sent ? 'Email sent' : 'Failed to send');
 ```
 
-#### With Retries
-
-```typescript
-const sent = await mailer.sendConfirmationWithRetry(
-  'user@example.com',
-  (email) => `Welcome, ${email}!`,
-  (email) => `<p>Hello ${email}</p>`,
-  3, // retries
-  1000 // delay in ms
-);
-console.log(sent ? 'Email sent after retries' : 'Failed after retries');
-```
-
 ### Bulk Email Sending
-
 ```typescript
 const subjectFn = (email) => `Hello, ${email}!`;
 const bodyFn = (email) => `<h1>Welcome</h1><p>Join us, ${email}!</p>`;
@@ -218,23 +183,19 @@ console.log(`Sent to ${successCount} users`);
 ⚠️ **Warning**: Check SMTP rate limits (e.g., Gmail: 500/day).
 
 ### Saving the Waitlist
-
 ```typescript
 const saved = await mailer.saveWaitlist();
 console.log(saved ? 'Waitlist saved' : 'Failed to save');
 ```
 
 ### Advanced Queries
-
 #### Find Emails by Pattern
-
 ```typescript
 const matches = await mailer.findEmailsByPattern('example');
 console.log('Matching emails:', matches); // e.g., ['user@example.com']
 ```
 
 #### Count by Date Range
-
 ```typescript
 const count = await mailer.countWaitlistByDate(
   new Date('2023-01-01'),
@@ -244,18 +205,27 @@ console.log(`Emails in 2023: ${count}`);
 ```
 
 ### Event Handling
-
 ```typescript
 mailer.on('onEmailAdded', (email) => console.log(`Added: ${email}`));
 mailer.on('onEmailRemoved', (email) => console.log(`Removed: ${email}`));
 mailer.on('onEmailSent', (email, info) => console.log(`Sent to ${email}: ${info.messageId}`));
+mailer.on('onEmailRetry', (email, attempt) => console.log(`Retrying ${email}, attempt ${attempt}`));
 mailer.on('onBulkConfirmationComplete', ({ successCount, total }) => console.log(`Bulk: ${successCount}/${total}`));
 mailer.on('onWaitlistSaved', (emails) => console.log('Saved:', emails));
-mailer.on('onError', ({ email, action, error }) => console.error(`Error in ${action} for ${email}:`, error));
+mailer.on('onWaitlistCleared', () => console.log('Waitlist cleared'));
+mailer.on('onValidationError', ({ message }) => console.error(`Validation error: ${message}`));
+mailer.on('onDuplicateEmail', (email) => console.log(`Duplicate email: ${email}`));
+mailer.on('onError', ({ context, message, error }) => console.error(`Error in ${context}: ${message}`, error));
+mailer.on('onTransporterReady', () => console.log('Transporter ready'));
+mailer.on('onTransporterError', (error) => console.error('Transporter error:', error));
+mailer.on('onDbConnected', () => console.log('MongoDB connected'));
+mailer.on('onDbError', (error) => console.error('MongoDB error:', error));
+mailer.on('onSqlConnected', () => console.log('SQL connected'));
+mailer.on('onSqlError', (error) => console.error('SQL error:', error));
+mailer.on('onInitialized', () => console.log('WaitlistMailer initialized'));
 ```
 
 ### Closing Resources
-
 ```typescript
 await mailer.close();
 console.log('Resources closed');
@@ -266,35 +236,28 @@ console.log('Resources closed');
 ## API
 
 ### Constructor
-
 ```typescript
-new WaitlistMailer(storage: 'local' | 'db' | 'sql', mailConfig: MailConfig, options?: WaitlistMailerOptions)
+new WaitlistMailer(storage: StorageType, mailConfig: MailConfig, options?: WaitlistMailerOptions)
 ```
-- **storage**: Storage type (default: 'local')
-- **mailConfig**: { host: string, port: number, user: string, pass: string }
-- **options**: { companyName?: string, mongoUri?: string, sqlConfig?: { dialect: 'postgres' | 'mysql', host: string, port: number, username: string, password: string, database: string } }
+- **storage**: Storage type (`Local`, `Db`, or `Sql`).  
+- **mailConfig**: { host: string, port: number, user: string, pass: string }.  
+- **options**: { companyName?: string, mongoUri?: string, sqlConfig?: SQL config object }.  
 
 ### Methods
-
 | Method | Description | Returns |
 |--------|-------------|---------|
-| addEmail(email: string) | Adds a validated, unique email | boolean |
-| removeEmail(email: string) | Removes an email if it exists | boolean |
-| getWaitlist() | Returns all emails as an array | string[] |
-| clearWaitlist() | Clears in-memory and persistent waitlist | void |
-| isInitialized() | Checks if initialization is complete | boolean |
-| waitForInitialization() | Waits for async setup to finish | Promise<void> |
-| sendConfirmation(email, subjectTemplate, bodyTemplate) | Sends an email with templates | Promise<boolean> |
-| sendConfirmationFromFile(email, subjectTemplate, templateFilePath, replacements) | Sends using an HTML file | Promise<boolean> |
-| sendConfirmationWithRetry(email, subjectTemplate, bodyTemplate, retries, delayMs) | Sends with retries | Promise<boolean> |
-| sendBulkConfirmation(subjectTemplate, bodyTemplate, retries, delayMs) | Sends to all emails | Promise<number> |
-| saveWaitlist() | Persists waitlist to storage | Promise<boolean> |
-| findEmailsByPattern(pattern: string) | Finds emails matching a pattern | Promise<string[]> |
-| countWaitlistByDate(startDate?: Date, endDate?: Date) | Counts emails by date range | Promise<number> |
-| close() | Closes database and transporter | Promise<void> |
+| `addEmail(email)` | Adds validated email | `Promise<boolean>` |
+| `removeEmail(email)` | Removes email | `Promise<boolean>` |
+| `getWaitlist()` | Returns all emails | `string[]` |
+| `clearWaitlist()` | Clears waitlist | `Promise<void>` |
+| `sendConfirmation(...)` | Sends email | `Promise<boolean>` |
+| `sendBulkConfirmation(...)` | Bulk emails | `Promise<number>` |
+| `saveWaitlist()` | Persists waitlist to storage | `Promise<boolean>` |
+| `findEmailsByPattern(pattern)` | Finds emails matching a pattern | `Promise<string[]>` |
+| `countWaitlistByDate(start, end)` | Counts emails by date range | `Promise<number>` |
+| `close()` | Closes database connections | `Promise<void>` |
 
 ### Events
-
 - `onEmailAdded(email: string)`  
 - `onEmailRemoved(email: string)`  
 - `onEmailSent(email: string, info: SentMessageInfo)`  
@@ -302,39 +265,35 @@ new WaitlistMailer(storage: 'local' | 'db' | 'sql', mailConfig: MailConfig, opti
 - `onBulkConfirmationComplete({ successCount: number, total: number })`  
 - `onWaitlistSaved(emails: string[])`  
 - `onWaitlistCleared()`  
-- `onValidationError({ email: string, error: string })`  
+- `onValidationError({ message: string })`  
 - `onDuplicateEmail(email: string)`  
-- `onError({ email: string, action: string, error: unknown })`  
+- `onError({ context: string, message: string, error: unknown })`  
 - `onTransporterReady()`  
 - `onTransporterError(error: Error)`  
 - `onDbConnected()`  
 - `onDbError(error: Error)`  
 - `onSqlConnected()`  
 - `onSqlError(error: Error)`  
-- `onInitialized()`
+- `onInitialized()`  
 
 ---
 
 ## Common Errors
 
-- **SMTP Connection Refused**: Invalid mailConfig  
-  Fix: Verify host, port, user, pass
-- **Invalid Email**: Format error (e.g., user@)  
-  Fix: Use valid email (e.g., user@example.com)
-- **Duplicate Email**: Email already in waitlist  
-  Fix: Check getWaitlist() or handle onDuplicateEmail
-- **File Not Found**: Wrong templateFilePath  
-  Fix: Ensure file exists and path is correct
-- **Database Failure**: Invalid mongoUri or sqlConfig  
-  Fix: Check DB server and credentials
+- **SMTP Connection Refused**: Invalid mailConfig.  
+  Fix: Verify host, port, user, and pass.  
+- **Invalid Email**: Format error.  
+  Fix: Use valid email format.  
+- **Duplicate Email**: Already in waitlist.  
+  Fix: Check existing emails.  
 
 ---
 
 ## Contributions
 
-- Fork the repo  
-- Submit pull requests  
-- Report issues on GitHub
+- Fork the repo.  
+- Submit pull requests.  
+- Report issues.  
 
 ---
 
@@ -348,9 +307,8 @@ MIT - Free to use, modify, and distribute with attribution.
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.0.0 | March 3, 2025 | - Stable release with bulk sending<br>- Indexed MongoDB (Waitlist) and SQL (waitlist) storage<br>- Advanced queries: findEmailsByPattern, countWaitlistByDate<br>- Centralized error handling<br>- Enhanced modularity |
-| 0.1.0 | TBD | - Pre-release: Basic waitlist and email sending<br>- Local storage only<br>- Initial event system |
-
-⚠️ Future: UI integration may be considered for later versions.
+| 1.1.0 | March 5, 2025 | - Improved error handling<br>- Support for multiple SMTP providers<br>- Handlebars for templates<br>- Comprehensive tests |
+| 1.0.0 | March 3, 2025 | - Bulk sending<br>- Database indexing |
+| 0.1.0 | TBD | Initial release |
 
 ---

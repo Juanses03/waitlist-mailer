@@ -1,252 +1,312 @@
-import WaitlistMailer from './index'; // Adjust the path as needed
+import { WaitlistMailer, StorageType } from './index';
 import nodemailer from 'nodemailer';
 import mongoose from 'mongoose';
 import { Sequelize } from 'sequelize';
-import dotenv from 'dotenv';
+import Handlebars from 'handlebars';
 
-// Load environment variables from .env.local file
-dotenv.config({ path: '.env.local' });
+// Silenciar console.log y console.error durante las pruebas
+jest.spyOn(console, 'log').mockImplementation(() => {});
+jest.spyOn(console, 'error').mockImplementation(() => {});
 
+// Mock de nodemailer
 jest.mock('nodemailer');
-jest.mock('mongoose');
+const mockSendMail = jest.fn().mockResolvedValue({ messageId: 'mock-id' });
+(nodemailer.createTransport as jest.Mock).mockReturnValue({
+  sendMail: mockSendMail,
+  verify: jest.fn().mockImplementation(callback => callback(null)),
+});
 
-const mockMailConfig = {
-  host: process.env.SMTP_HOST!,  // Non-null assertion since .env.local provides it
-  port: parseInt(process.env.SMTP_PORT!, 10), // Already safe with parseInt
-  user: process.env.SMTP_USER!,  // Non-null assertion
-  pass: process.env.SMTP_PASS!,  // Non-null assertion
+// Mock de Handlebars
+jest.mock('handlebars');
+const mockCompile = jest.fn().mockReturnValue((data: any) => `<h1>Hello ${data.email}</h1>`);
+(Handlebars.compile as jest.Mock).mockImplementation(mockCompile);
+
+// Mock para simular lectura de archivos
+jest.mock('fs/promises', () => ({
+  readFile: jest.fn().mockResolvedValue('{{email}} - {{companyName}}'),
+}));
+
+// Configuración desde .env
+const mailConfig = {
+  host: process.env.SMTP_HOST || 'smtp.example.com',
+  port: Number(process.env.SMTP_PORT) || 587,
+  user: process.env.SMTP_USER || 'test@example.com',
+  pass: process.env.SMTP_PASS || 'password',
 };
 
-const mockOptionsMongo = {
-  companyName: 'Test Company',
-  mongoUri: process.env.MONGO_URI,
-  sqlConfig: undefined,
+const sqlConfig = {
+  dialect: (process.env.SQL_DIALECT || 'mysql') as 'mysql' | 'postgres' | 'sqlite',
+  host: process.env.SQL_HOST || 'localhost',
+  port: Number(process.env.SQL_PORT) || 3306,
+  username: process.env.SQL_USER || 'root',
+  password: process.env.SQL_PASSWORD || '',
+  database: process.env.SQL_DATABASE || 'testdb',
 };
 
-const mockOptionsSQL = {
-  companyName: 'Test Company',
-  mongoUri: undefined,
-  sqlConfig: {
-    dialect: process.env.SQL_DIALECT as 'mysql' | 'postgres',
-    host: process.env.SQL_HOST || 'localhost', // Provide default value
-    port: parseInt(process.env.SQL_PORT!, 10),
-    username: process.env.SQL_USER || '', // Provide default value
-    password: process.env.SQL_PASSWORD || '', // Provide default value
-    database: process.env.SQL_DATABASE || 'test', // Provide default value
-  },
-};
+// Helper para crear conexión SQL
+const createSqlConnection = () =>
+  new Sequelize({
+    dialect: sqlConfig.dialect,
+    host: sqlConfig.host,
+    port: sqlConfig.port,
+    username: sqlConfig.username,
+    password: sqlConfig.password,
+    database: sqlConfig.database,
+    logging: false,
+  });
 
-describe('WaitlistMailer', () => {
+describe('WaitlistMailer - Comprehensive Tests', () => {
   let mailer: WaitlistMailer;
 
-  const setupMockTransporter = () => {
-    return {
-      sendMail: jest.fn().mockResolvedValue({ messageId: '123' }),
-      verify: jest.fn().mockImplementation((callback) => callback(null)),
-      options: {
-        auth: {
-          user: mockMailConfig.user,
-          pass: mockMailConfig.pass,
-        },
-      },
-    };
-  };
+  afterEach(async () => {
+    if (mailer) {
+      await mailer.close();
+    }
+    jest.clearAllMocks();
+  });
 
-  // MongoDB Tests
-  describe('with MongoDB', () => {
-    beforeAll(async () => {
-      if (!mockOptionsMongo.mongoUri) throw new Error('MONGO_URI not defined');
-      await mongoose.connect(mockOptionsMongo.mongoUri);
+  // ==================== Local Storage ====================
+  describe('Local Storage', () => {
+    beforeEach(async () => {
+      mailer = new WaitlistMailer(StorageType.Local, mailConfig, { companyName: 'TestCo' });
+      await mailer.waitForInitialization();
     });
+
+    test('Adds and removes an email successfully', async () => {
+      const addedSpy = jest.fn();
+      mailer.on('onEmailAdded', addedSpy);
+      const removedSpy = jest.fn();
+      mailer.on('onEmailRemoved', removedSpy);
+
+      expect(await mailer.addEmail('test@local.com')).toBe(true);
+      expect(mailer.getWaitlist()).toContain('test@local.com');
+      expect(addedSpy).toHaveBeenCalledWith('test@local.com');
+
+      expect(await mailer.removeEmail('test@local.com')).toBe(true);
+      expect(mailer.getWaitlist()).not.toContain('test@local.com');
+      expect(removedSpy).toHaveBeenCalledWith('test@local.com');
+    }, 10000);
+
+    test('Clears the waitlist', async () => {
+      const clearedSpy = jest.fn();
+      mailer.on('onWaitlistCleared', clearedSpy);
+
+      await mailer.addEmail('test1@local.com');
+      await mailer.addEmail('test2@local.com');
+      expect(mailer.getWaitlist()).toHaveLength(2);
+
+      await mailer.clearWaitlist();
+      expect(mailer.getWaitlist()).toHaveLength(0);
+      expect(clearedSpy).toHaveBeenCalled();
+    }, 10000);
+
+    test('Checks initialization status', async () => {
+      expect(mailer.isInitialized()).toBe(true);
+    }, 10000);
+
+    test('Sends a confirmation email', async () => {
+      const sentSpy = jest.fn();
+      mailer.on('onEmailSent', sentSpy);
+
+      await mailer.addEmail('test@local.com');
+      const sent = await mailer.sendConfirmation(
+        'test@local.com',
+        email => `Welcome ${email}`,
+        email => `<p>Welcome ${email}</p>`
+      );
+      expect(sent).toBe(true);
+      expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({
+        to: 'test@local.com',
+        subject: 'Welcome test@local.com',
+      }));
+      expect(sentSpy).toHaveBeenCalledWith('test@local.com');
+    }, 10000);
+
+    test('Sends a confirmation email using a template', async () => {
+      await mailer.addEmail('test@local.com');
+      const sent = await mailer.sendConfirmationFromFile(
+        'test@local.com',
+        email => `Welcome ${email}`,
+        'mock/path.hbs',
+        { extra: 'data' }
+      );
+      expect(sent).toBe(true);
+      expect(mockCompile).toHaveBeenCalled();
+    }, 10000);
+  });
+
+  // ==================== MongoDB Storage ====================
+  describe('MongoDB Storage (testdb.waitlist)', () => {
+    beforeAll(async () => {
+      await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/testdb', {
+        serverSelectionTimeoutMS: 10000,
+      });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
-    });
+    }, 20000);
 
-    beforeEach(() => {
-      (nodemailer.createTransport as jest.Mock).mockReturnValue(setupMockTransporter());
-      mailer = new WaitlistMailer('db', mockMailConfig, mockOptionsMongo);
-    });
+    beforeEach(async () => {
+      mailer = new WaitlistMailer(StorageType.Db, mailConfig, {
+        mongoUri: process.env.MONGO_URI || 'mongodb://localhost:27017/testdb',
+        companyName: 'TestCo',
+      });
+      await mailer.waitForInitialization();
+    }, 10000);
 
-    afterEach(async () => {
-      jest.clearAllMocks(); // Clear mock function calls
-      mailer.clearWaitlist(); // Clear in-memory waitlist
-      // Clear MongoDB collection (assumes a 'waitlist' collection)
-      await mongoose.connection.collection('waitlists').deleteMany({});
-    });
+    test('Persists an email and queries it', async () => {
+      await mailer.addEmail('mongo@test.com');
+      const emails = await mailer.findEmailsByPattern('mongo');
+      expect(emails).toContain('mongo@test.com');
+      expect(await mailer.countWaitlistByDate()).toBeGreaterThanOrEqual(1);
+      expect(mailer.getWaitlist()).toContain('mongo@test.com');
+    }, 10000);
 
-    it('should save and load waitlist from MongoDB', async () => {
-      mailer.addEmail('test@example.com');
-      await mailer.saveWaitlist();
+    test('Clears the waitlist', async () => {
+      const clearedSpy = jest.fn();
+      mailer.on('onWaitlistCleared', clearedSpy);
 
-      const mailer2 = new WaitlistMailer('db', mockMailConfig, mockOptionsMongo);
-      await mailer2.waitForInitialization();
-      expect(mailer2.getWaitlist()).toContain('test@example.com');
-    });
+      await mailer.addEmail('mongo2@test.com');
+      await mailer.clearWaitlist();
+      expect(await mailer.countWaitlistByDate()).toBe(0);
+      expect(clearedSpy).toHaveBeenCalled();
+    }, 10000);
   });
 
-  // SQL Tests
-  describe('with SQL', () => {
+  // ==================== SQL Storage ====================
+  describe('SQL Storage (testdb.waitlist)', () => {
     let sequelize: Sequelize;
 
     beforeAll(async () => {
-      if (
-        !mockOptionsSQL.sqlConfig!.dialect ||
-        !mockOptionsSQL.sqlConfig!.host ||
-        !mockOptionsSQL.sqlConfig!.port ||
-        !mockOptionsSQL.sqlConfig!.username ||
-        !mockOptionsSQL.sqlConfig!.database
-      ) {
-        throw new Error('SQL configuration missing in .env.local');
-      }
+      sequelize = createSqlConnection();
+    }, 20000);
 
-      sequelize = new Sequelize({
-        dialect: mockOptionsSQL.sqlConfig!.dialect,
-        host: mockOptionsSQL.sqlConfig!.host,
-        port: mockOptionsSQL.sqlConfig!.port,
-        username: mockOptionsSQL.sqlConfig!.username,
-        password: mockOptionsSQL.sqlConfig!.password || '', // Empty string if undefined
-        database: mockOptionsSQL.sqlConfig!.database,
-        logging: false,
+    beforeEach(async () => {
+      mailer = new WaitlistMailer(StorageType.Sql, mailConfig, {
+        companyName: 'TestCo',
+        sqlConfig,
       });
-
-      try {
-        await sequelize.authenticate();
-        console.log('MySQL connection established successfully');
-        await sequelize.query(`CREATE DATABASE IF NOT EXISTS ${mockOptionsSQL.sqlConfig!.database};`);
-        await sequelize.query(`USE ${mockOptionsSQL.sqlConfig!.database};`);
-      } catch (error) {
-        console.error('Failed to connect to MySQL:', error);
-        throw error;
-      }
-    });
+      await mailer.waitForInitialization();
+    }, 10000);
 
     afterAll(async () => {
       if (sequelize) {
         await sequelize.close();
       }
-    });
+    }, 20000);
 
-    beforeEach(async () => {
-      (nodemailer.createTransport as jest.Mock).mockReturnValue(setupMockTransporter());
-      mailer = new WaitlistMailer('sql', mockMailConfig, mockOptionsSQL);
-      await mailer.waitForInitialization();
-    });
+    test('Persists an email and queries it', async () => {
+      await mailer.addEmail('sql@test.com');
+      const count = await mailer.countWaitlistByDate();
+      expect(count).toBeGreaterThanOrEqual(1);
+      const emails = await mailer.findEmailsByPattern('sql');
+      expect(emails).toContain('sql@test.com');
+      expect(mailer.getWaitlist()).toContain('sql@test.com');
+    }, 10000);
 
-    afterEach(async () => {
-      jest.clearAllMocks(); // Clear mock function calls
-      mailer.clearWaitlist(); // Clear in-memory waitlist
-      // Clear SQL table
-      try {
-        await sequelize.query('TRUNCATE TABLE waitlist;');
-      } catch (error) {
-        console.warn('Could not truncate table:', error);
-      }
-    });
+    test('Saves multiple emails persistently', async () => {
+      const savedSpy = jest.fn();
+      mailer.on('onWaitlistSaved', savedSpy);
 
-    it('should save and load waitlist from SQL', async () => {
-      mailer.addEmail('test@example.com');
-      await mailer.saveWaitlist();
+      await mailer.addEmail('sql1@test.com');
+      await mailer.addEmail('sql2@test.com');
+      const saved = await mailer.saveWaitlist();
+      expect(saved).toBe(true);
+      const emails = await mailer.findEmailsByPattern('sql');
+      expect(emails.length).toBeGreaterThanOrEqual(2);
+      expect(savedSpy).toHaveBeenCalledWith(expect.arrayContaining(['sql1@test.com', 'sql2@test.com']));
+    }, 10000);
 
-      const mailer2 = new WaitlistMailer('sql', mockMailConfig, mockOptionsSQL);
-      await mailer2.waitForInitialization();
-      expect(mailer2.getWaitlist()).toContain('test@example.com');
-    });
+    test('Clears the waitlist', async () => {
+      const clearedSpy = jest.fn();
+      mailer.on('onWaitlistCleared', clearedSpy);
+
+      await mailer.addEmail('sql3@test.com');
+      await mailer.clearWaitlist();
+      expect(await mailer.countWaitlistByDate()).toBe(0);
+      expect(clearedSpy).toHaveBeenCalled();
+    }, 10000);
   });
 
-  // Local Storage Tests
-  describe('with Local Storage', () => {
-    beforeEach(() => {
-      (nodemailer.createTransport as jest.Mock).mockReturnValue(setupMockTransporter());
-      mailer = new WaitlistMailer('local', mockMailConfig, mockOptionsMongo);
-      mailer.clearWaitlist();
-    });
+  // ==================== Email Sending Features ====================
+  describe('Email Sending Features', () => {
+    beforeEach(async () => {
+      mailer = new WaitlistMailer(StorageType.Local, mailConfig, { companyName: 'TestCo' });
+      await mailer.waitForInitialization();
+    }, 10000);
 
-    afterEach(() => {
-      jest.clearAllMocks(); // Clear mock function calls
-      mailer.clearWaitlist(); // Clear in-memory waitlist
-    });
+    test('Sends bulk confirmation to all emails', async () => {
+      const bulkSpy = jest.fn();
+      mailer.on('onBulkConfirmationComplete', bulkSpy);
 
-    it('should initialize with local storage', () => {
-      expect(mailer.isInitialized()).toBe(true);
-    });
-
-    it('should add an email to the waitlist', () => {
-      const result = mailer.addEmail('test@example.com');
-      expect(result).toBe(true);
-      expect(mailer.getWaitlist()).toContain('test@example.com');
-    });
-
-    it('should not add an invalid email', () => {
-      const result = mailer.addEmail('invalid-email');
-      expect(result).toBe(false);
-    });
-
-    it('should not add a duplicate email', () => {
-      mailer.addEmail('test@example.com');
-      const result = mailer.addEmail('test@example.com');
-      expect(result).toBe(false);
-    });
-
-    it('should remove an email from the waitlist', () => {
-      mailer.addEmail('test@example.com');
-      const result = mailer.removeEmail('test@example.com');
-      expect(result).toBe(true);
-      expect(mailer.getWaitlist()).not.toContain('test@example.com');
-    });
-
-    it('should send a confirmation email', async () => {
-      mailer.addEmail('test@example.com');
-      const result = await mailer.sendConfirmation(
-        'test@example.com',
-        () => 'Welcome!',
-        () => 'Your confirmation email.'
+      await mailer.addEmail('bulk1@test.com');
+      await mailer.addEmail('bulk2@test.com');
+      const sentCount = await mailer.sendBulkConfirmation(
+        email => `Bulk ${email}`,
+        email => `<p>Bulk ${email}</p>`,
+        2,
+        100
       );
-      expect(result).toBe(true);
-      expect(nodemailer.createTransport().sendMail).toHaveBeenCalled();
-    });
+      expect(sentCount).toBe(2);
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+      expect(bulkSpy).toHaveBeenCalledWith({ successCount: 2, total: 2 });
+    }, 10000);
 
-    it('should handle email sending errors', async () => {
-      (nodemailer.createTransport().sendMail as jest.Mock).mockRejectedValue(new Error('Send error'));
-      mailer.addEmail('test@example.com');
-      const result = await mailer.sendConfirmation(
-        'test@example.com',
-        () => 'Welcome!',
-        () => 'Your confirmation email.'
+    test('Retries sending on failure', async () => {
+      const retrySpy = jest.fn();
+      mailer.on('onEmailRetry', retrySpy);
+
+      await mailer.addEmail('retry@test.com');
+      mockSendMail
+        .mockRejectedValueOnce(new Error('Failed'))
+        .mockResolvedValueOnce({ messageId: 'mock-id' });
+
+      const sent = await mailer.sendConfirmationWithRetry(
+        'retry@test.com',
+        email => `Retry ${email}`,
+        email => `<p>Retry ${email}</p>`,
+        1,
+        100
       );
-      expect(result).toBe(false);
-    });
+      expect(sent).toBe(true);
+      expect(mockSendMail).toHaveBeenCalledTimes(2);
+      expect(retrySpy).toHaveBeenCalledWith('retry@test.com', 1);
+    }, 10000);
+  });
 
-    it('should find emails by pattern', async () => {
-      mailer.addEmail('test@example.com');
-      mailer.addEmail('anothertest@example.com');
-      const results = await mailer.findEmailsByPattern('test');
-      expect(results).toContain('test@example.com');
-      expect(results).toContain('anothertest@example.com');
-    });
+  // ==================== Error Handling ====================
+  describe('Error Handling', () => {
+    test('Throws error on invalid mail config', () => {
+      expect(() => new WaitlistMailer(StorageType.Local, {
+        host: '',
+        port: 0,
+        user: '',
+        pass: '',
+      })).toThrow('Invalid mail configuration');
+    }, 10000);
 
-    it('should count waitlist by date range', async () => {
-      mailer.addEmail('test@example.com');
-      const startDate = new Date('2023-01-01');
-      const endDate = new Date('2023-12-31');
-      const count = await mailer.countWaitlistByDate(startDate, endDate);
-      expect(count).toBeGreaterThan(0);
-    });
+    test('Rejects invalid email format', async () => {
+      mailer = new WaitlistMailer(StorageType.Local, mailConfig, { companyName: 'TestCo' });
+      await mailer.waitForInitialization();
+      const validationSpy = jest.fn();
+      mailer.on('onValidationError', validationSpy);
 
-    it('should clear the waitlist', () => {
-      mailer.addEmail('test@example.com');
-      mailer.clearWaitlist();
-      expect(mailer.getWaitlist()).toHaveLength(0);
-    });
+      const added = await mailer.addEmail('invalid-email');
+      expect(added).toBe(false);
+      expect(validationSpy).toHaveBeenCalled();
+    }, 10000);
 
-    it('should save the waitlist', async () => {
-      mailer.addEmail('test@example.com');
-      const result = await mailer.saveWaitlist();
-      expect(result).toBe(true);
-    });
+    test('Handles duplicate email', async () => {
+      mailer = new WaitlistMailer(StorageType.Local, mailConfig, { companyName: 'TestCo' });
+      await mailer.waitForInitialization();
+      const duplicateSpy = jest.fn();
+      mailer.on('onDuplicateEmail', duplicateSpy);
 
-    it('should close resources properly', async () => {
-      await mailer.close();
-    });
+      await mailer.addEmail('dup@test.com');
+      const addedAgain = await mailer.addEmail('dup@test.com');
+      expect(addedAgain).toBe(false);
+      expect(duplicateSpy).toHaveBeenCalledWith('dup@test.com');
+    }, 10000);
   });
 });

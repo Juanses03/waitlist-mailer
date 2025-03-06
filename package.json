@@ -1,26 +1,54 @@
 {
   "name": "waitlist-mailer",
-  "version": "1.0.0",
-  "description": "A tool to manage waitlists and send confirmation emails.",
+  "version": "1.1.0",
+  "description": "WaitlistMailer is a powerful TypeScript library for managing waitlists and sending confirmation emails. It supports local, MongoDB, and SQL storage, customizable email templates, bulk email sending, automatic retries, and advanced queries. Perfect for Node.js applications!",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "jest",
-    "build": "tsup lib/index.ts --format esm,cjs --dts"
+    "build": "tsup lib/index.ts --format esm,cjs --dts",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write .",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "waitlist",
+    "email",
     "mailer",
     "nodemailer",
-    "typescript"
+    "typescript",
+    "mongodb",
+    "sql",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "bulk-email",
+    "email-templates",
+    "event-driven",
+    "nodejs",
+    "javascript",
+    "library"
   ],
-  "author": "JuansesDev",
-  "license": "ISC",
+  "author": {
+    "name": "JuansesDev",
+    "email": "tu-email@example.com",
+    "url": "https://github.com/JuansesDev"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JuansesDev/waitlist-mailer"
+  },
+  "homepage": "https://github.com/JuansesDev/waitlist-mailer#readme",
+  "bugs": {
+    "url": "https://github.com/JuansesDev/waitlist-mailer/issues"
+  },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.14",
     "@types/joi": "^17.2.3",
     "@types/nodemailer": "^6.4.17",
+    "dotenv": "^16.4.7",
     "eslint": "^9.20.1",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.6",
@@ -28,7 +56,8 @@
     "typescript": "^5.7.3"
   },
   "dependencies": {
-    "dotenv": "^16.4.7",
+    "@types/handlebars": "^4.1.0",
+    "handlebars": "^4.7.8",
     "joi": "^17.13.3",
     "mongoose": "^8.11.0",
     "mysql2": "^3.12.0",
